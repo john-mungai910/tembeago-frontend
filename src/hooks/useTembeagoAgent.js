@@ -2,22 +2,12 @@
  * useTembeagoAgent.js
  * -------------------
  * React hook for the Tembeago AI Recommendation Agent.
- * Supports streaming via Server-Sent Events (SSE).
+ * Uses SSE streaming with proper fallback handling.
  */
 
 import { useState, useCallback, useRef } from 'react'
 
 const AGENT_BASE_URL = import.meta.env.VITE_AGENT_URL || 'http://127.0.0.1:8000'
-
-// Check if a string is JSON (to avoid displaying raw JSON as text)
-function isJSON(str) {
-  try {
-    const trimmed = str.trim()
-    return (trimmed.startsWith('{') || trimmed.startsWith('['))
-  } catch (_) {
-    return false
-  }
-}
 
 export default function useTembeagoAgent() {
 
@@ -46,15 +36,15 @@ export default function useTembeagoAgent() {
       .map(m => ({ role: m.role, content: m.content }))
 
     const updatedMessages = [...history, newUserMessage]
-
     setMessages(prev => [...prev, newUserMessage])
     setIsLoading(true)
 
     abortControllerRef.current = new AbortController()
 
     try {
+      // ── Try SSE streaming first ─────────────────────────────────────────────
       const response = await fetch(`${AGENT_BASE_URL}/chat/stream`, {
-        method: 'POST',
+        method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           messages:  updatedMessages,
@@ -65,26 +55,30 @@ export default function useTembeagoAgent() {
       })
 
       if (!response.ok) {
-        const err = await response.json()
-        throw new Error(err.detail || 'Something went wrong.')
+        throw new Error('Stream request failed')
       }
 
       setIsLoading(false)
       setIsStreaming(true)
 
-      const reader = response.body.getReader()
+      const reader  = response.body.getReader()
       const decoder = new TextDecoder()
-      let accumulatedText = ''
+
+      let accumulatedText      = ''
       let finalRecommendations = []
-      let finalTip = null
-      let isJsonResponse = false  // flag to skip raw JSON display
+      let finalTip             = null
+      let finalMessage         = ''
+      let buffer               = ''   // buffer for incomplete SSE lines
 
       while (true) {
         const { done, value } = await reader.read()
         if (done) break
 
-        const chunk = decoder.decode(value, { stream: true })
-        const lines = chunk.split('\n')
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+
+        // Keep last incomplete line in buffer
+        buffer = lines.pop() || ''
 
         for (const line of lines) {
           if (!line.startsWith('data: ')) continue
@@ -93,65 +87,107 @@ export default function useTembeagoAgent() {
             const data = JSON.parse(line.slice(6))
 
             switch (data.type) {
+
               case 'text':
-                // Skip if the content looks like raw JSON
-                if (isJSON(data.content) || isJSON(accumulatedText + data.content)) {
-                  isJsonResponse = true
-                  break
-                }
-                if (!isJsonResponse) {
-                  accumulatedText += data.content
-                  setStreamingText(accumulatedText)
-                }
+                accumulatedText += data.content
+                setStreamingText(accumulatedText)
+                // Clear tool status once text starts coming in
+                setToolStatus('')
                 break
 
               case 'tool_call':
+                // Force re-render by appending timestamp
                 setToolStatus(data.message)
-                // Reset when tools start
-                accumulatedText = ''
-                isJsonResponse = false
-                setStreamingText('')
                 break
 
               case 'recommendations':
-                finalRecommendations = data.data || []
-                finalTip = data.tip || null
-                threadIdRef.current = data.thread_id
+                finalRecommendations = data.data    || []
+                finalTip             = data.tip     || null
+                finalMessage         = data.message || ''
+                if (data.thread_id) threadIdRef.current = data.thread_id
                 setRecommendations(finalRecommendations)
                 setTip(finalTip)
-                // Use the message from recommendations if text was JSON
-                if (isJsonResponse && data.message) {
-                  accumulatedText = data.message
-                }
                 break
 
               case 'done':
                 setIsStreaming(false)
                 setToolStatus('')
                 setStreamingText('')
-                setMessages(prev => [
-                  ...prev,
-                  {
-                    role:            'assistant',
-                    content:         accumulatedText,
-                    recommendations: finalRecommendations,
-                    tip:             finalTip,
-                  }
-                ])
-                isJsonResponse = false
-                break
+
+                const displayMessage = accumulatedText.trim() || finalMessage.trim() || 'Here are my top recommendations for you!'
+
+                setMessages(prev => [...prev, {
+                  role:            'assistant',
+                  content:         displayMessage,
+                  recommendations: finalRecommendations,
+                  tip:             finalTip,
+                }])
+                return  // exit cleanly
 
               case 'error':
                 throw new Error(data.message)
             }
-          } catch (_) {}
+
+          } catch (_) {
+            // Skip malformed lines silently
+          }
         }
       }
 
     } catch (err) {
       if (err.name === 'AbortError') return
-      setError(err.message || 'Failed to connect to the agent. Please try again.')
-      setMessages(prev => prev.slice(0, -1))
+
+      // ── Fallback to regular /chat if streaming fails ────────────────────────
+      console.warn('Streaming failed, falling back to /chat:', err.message)
+
+      try {
+        setToolStatus('🔍 Searching Tembeago listings...')
+
+        const fallbackRes = await fetch(`${AGENT_BASE_URL}/chat`, {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            messages:  updatedMessages,
+            user_id:   'user_1',
+            thread_id: threadIdRef.current || undefined,
+          }),
+        })
+
+        if (!fallbackRes.ok) throw new Error('Request failed')
+
+        const data = await fallbackRes.json()
+        threadIdRef.current = data.thread_id
+
+        setToolStatus('')
+        setIsLoading(false)
+        setIsStreaming(true)
+
+        // Simulate typing
+        const words = (data.message || '').split(' ')
+        let built = ''
+        for (let i = 0; i < words.length; i++) {
+          built += (i > 0 ? ' ' : '') + words[i]
+          setStreamingText(built)
+          await new Promise(r => setTimeout(r, 30))
+        }
+
+        setIsStreaming(false)
+        setStreamingText('')
+
+        setMessages(prev => [...prev, {
+          role:            'assistant',
+          content:         data.message || '',
+          recommendations: data.recommendations || [],
+          tip:             data.tip || null,
+        }])
+        setRecommendations(data.recommendations || [])
+        setTip(data.tip || null)
+
+      } catch (fallbackErr) {
+        setError(fallbackErr.message || 'Failed to connect to the agent.')
+        setMessages(prev => prev.slice(0, -1))
+      }
+
     } finally {
       setIsLoading(false)
       setIsStreaming(false)

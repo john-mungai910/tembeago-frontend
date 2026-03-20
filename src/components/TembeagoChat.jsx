@@ -63,7 +63,7 @@ export default function TembeagoChat() {
         {/* Welcome message */}
         {messages.length === 0 && !isBusy && (
           <div style={{ textAlign: 'center', color: '#9ca3af', padding: '40px 0' }}>
-            <p>👋 Hi! I'm Tembe, your Tembeago travel assistant.</p>
+            <p>👋 Hi! I'm TembeaGo, your Tembeago travel assistant.</p>
             <p>Ask me to find hotels, attractions or tours anywhere in Kenya!</p>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', justifyContent: 'center', marginTop: '16px' }}>
               {[
@@ -194,7 +194,7 @@ export default function TembeagoChat() {
           onKeyDown={handleKeyDown}
           placeholder="Ask me to find hotels, tours or attractions..."
           disabled={isBusy}
-          style={{ flex: 1, padding: '10px 14px', borderRadius: '24px', border: '1px solid #e5e7eb', fontSize: '14px', outline: 'none', background: isBusy ? '#f9fafb' : '#fff' }}
+          style={{ flex: 1, padding: '10px 14px', borderRadius: '24px', border: '1px solid #e5e7eb', fontSize: '14px', outline: 'none', background: isBusy ? '#f9fafb' : '#fff', color: '#111827' }}
         />
         <button
           onClick={handleSend}
