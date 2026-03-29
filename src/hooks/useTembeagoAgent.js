@@ -45,11 +45,15 @@ export default function useTembeagoAgent() {
       // ── Try SSE streaming first ─────────────────────────────────────────────
       const response = await fetch(`${AGENT_BASE_URL}/chat/stream`, {
         method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+        'Content-Type': 'application/json',
+        'X-API-Key': import.meta.env.VITE_AGENT_API_KEY || '',
+        },
         body: JSON.stringify({
-          messages:  updatedMessages,
-          user_id:   'user_1',
-          thread_id: threadIdRef.current || undefined,
+          messages:   updatedMessages,
+          user_id:    'usr_004',
+          user_name:  'Amina',
+          thread_id:  threadIdRef.current || undefined,
         }),
         signal: abortControllerRef.current.signal,
       })
